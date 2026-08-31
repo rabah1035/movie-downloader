@@ -1,0 +1,28 @@
+# ملفات النظام والبيانات الحساسة
+site_config.json
+server_err.log
+server_out.log
+
+# مكتبة الملفات المحلية
+library.json
+
+# ملفات بايثون المؤقتة
+__pycache__/
+*.pyc
+*.pyo
+
+# ملفات PyInstaller (build/dist)
+build/
+dist/
+*.spec
+
+# محرك التحميل — يتم تنزيله تلقائياً
+aria2c.exe
+aria2_temp.zip
+
+# ملف سطح المكتب (استخدم web_downloader على الويب)
+app_desktop.py
+
+# ملفات إضافية غير مطلوبة على الخادم
+electrical_calculator.py
+movie_downloader.py
