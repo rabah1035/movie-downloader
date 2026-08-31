@@ -835,7 +835,24 @@ def search():
     if not query:
         return jsonify({"error": "اكتب اسم الفيلم"}), 400
 
-    resolved = IMDbResolver().resolve_movie(query)
+    resolver = IMDbResolver()
+    resolved = resolver.resolve_movie(query)
+
+    # Fallback: إن لم يُحل مباشرة، نلجأ لاقتراحات IMDb (تصحح الأخطاء الإملائية)
+    # ويُحسن ثباتية الاستجابة التي تتأرجح أحياناً
+    if not resolved:
+        sugg = _imdb_autocomplete(resolver, query) or _imdb_autocomplete(
+            resolver, re.sub(r"\b(19\d{2}|20\d{2})\b", "", query).strip()
+        )
+        if sugg:
+            s = sugg[0]
+            picked = (s["imdb_id"], s["title"], s["year"])
+            # تحقق أن الاسم المختار فعلاً يمثل الاستعلام قبل قبوله
+            base = re.sub(r"[\s:.\-_]+", "", (s["title"] or "").lower())
+            qbase = re.sub(r"[\s:.\-_]+", "", query.lower())
+            if base and (qbase in base or base in qbase or len(qbase) >= 3):
+                resolved = picked
+
     if not resolved:
         return jsonify({"error": "لم يتم العثور على الفيلم على IMDb"}), 404
 
@@ -846,10 +863,8 @@ def search():
     source_status = {}
     releases = parallel_search(imdb_id, title, year, clean_search_word, source_status)
     fallback = False
-    used_fallback = False
     if not releases:
         fallback = True
-        used_fallback = True
 
     if not releases:
         return jsonify({"error": f"لا توجد نسخ متاحة لـ {title} ({year})",
