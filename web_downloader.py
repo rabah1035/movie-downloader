@@ -432,6 +432,7 @@ const I18N = {
     srvDown:'❌ الخادم غير متصل — تأكد أن web_downloader.py يعمل ثم أعد المحاولة',
     dlInfo:'⏳ التحميل قيد التنفيذ — يمكنك ⏸ الإيقاف المؤقت أو ❌ الإلغاء',
     unknownErr:'خطأ غير معروف', startFail:'تعذر بدء التحميل',
+    dlLocal:'✅ فُتح رابط التورنت — سيبدأ التحميل على جهازك عبر تطبيق التورنت', noMagnet:'الرابط غير متوفر لهذه النسخة',
     of:'من', speedL:'⬇️ السرعة', etaL:'⏳ متبقي', elL:'⏱ المنقضي',
     connecting:'⏳ جاري الاتصال بالـ Peers وجلب بيانات الفيلم...'
   },
@@ -445,6 +446,7 @@ const I18N = {
     srvDown:'❌ Serveur injoignable — vérifiez que web_downloader.py fonctionne puis réessayez',
     dlInfo:'⏳ Téléchargement en cours — ⏸ Pause ou ❌ Annuler disponibles',
     unknownErr:'Erreur inconnue', startFail:'Impossible de démarrer le téléchargement',
+    dlLocal:'✅ Lien torrent ouvert — le téléchargement démarre sur votre appareil via votre client torrent', noMagnet:'Lien indisponible pour cette version',
     of:'sur', speedL:'⬇️ Vitesse', etaL:'⏳ Restant', elL:'⏱ Écoulé',
     connecting:'⏳ Connexion aux peers et récupération des données du film...'
   },
@@ -458,6 +460,7 @@ const I18N = {
     srvDown:'❌ Server unreachable — make sure web_downloader.py is running, then retry',
     dlInfo:'⏳ Download in progress — you can ⏸ Pause or ❌ Cancel',
     unknownErr:'Unknown error', startFail:'Could not start the download',
+    dlLocal:'✅ Torrent link opened — download starts on your device via your torrent client', noMagnet:'No link available for this release',
     of:'of', speedL:'⬇️ Speed', etaL:'⏳ ETA', elL:'⏱ Elapsed',
     connecting:'⏳ Connecting to peers and fetching movie data...'
   }
@@ -654,20 +657,17 @@ async function startDownload(i) {
   try {
     hideBanner();
     const r = releases[i];
-    const resp = await fetch('/download', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({
-        magnet: r.magnet,
-        title: matched.title,
-        year: matched.year,
-        imdb_id: matched.imdb_id,
-        dest: document.getElementById('dest').value.trim(),
-        size: r.size
-      })
-    });
-    const data = await resp.json();
-    if (!resp.ok) { showBanner('❌ ' + TR(data.error || I18N[LANG].startFail), 'err'); return; }
-    showBanner(I18N[LANG].dlInfo, 'info');
+    const m = r.magnet;
+    if (!m) { showBanner('❌ ' + I18N[LANG].noMagnet || 'الرابط غير متوفر', 'err'); return; }
+    // فتح المغناطيس على جهاز الزائر مباشرةً (التورنت يبدأ على جهازه)
+    window.open(m, '_blank');
+    // عملية النسخ لتسهيل الاستخدام اليدوي
+    try {
+      await navigator.clipboard.writeText(m);
+      showBanner(I18N[LANG].dlLocal, 'ok');
+    } catch(e) {
+      showBanner(I18N[LANG].dlLocal, 'info');
+    }
   } catch(e) {
     showBanner(I18N[LANG].srvDown, 'err');
   }
