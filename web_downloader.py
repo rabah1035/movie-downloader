@@ -21,6 +21,71 @@ from downloader import (
 
 app = Flask(__name__)
 
+# مهلات قصيرة ومنتظمة للمصادر حتى لا يتعلق البحث على الخوادم السحابية
+SEARCH_TIMEOUT = 4
+
+
+def parallel_search(imdb_id: str, title: str, year: str, search_word: str, source_status: dict):
+    """يبحث في كل المصادر بالتوازي، كل مصدر بمهلة قصيرة، ويجمع النتائج."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    idx = CustomIndexer()
+    idx.headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+
+    def safe(fn, key):
+        try:
+            t0 = time.time()
+            results = fn()
+            source_status[key] = len(results)
+            return results
+        except Exception:
+            source_status[key] = -1
+            return []
+
+    sources = {
+        "torrentio": lambda: idx.search_torrentio(imdb_id),
+        "piratebay": lambda: idx.search_piratebay(title, year),
+        "yts": lambda: idx.search_yts(imdb_id),
+    }
+
+    all_results = []
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futs = {ex.submit(safe, fn, key): key for key, fn in sources.items()}
+        for fut in futs:
+            try:
+                all_results.extend(fut.result(timeout=SEARCH_TIMEOUT + 2))
+            except Exception:
+                pass
+
+    # جمع النتائج بالتوازي ثم فلترة
+    return _apply_filter(all_results, idx, search_word, source_status)
+
+
+def _apply_filter(all_results, idx, search_word, source_status):
+    pattern = re.compile(rf"\b{re.escape(search_word)}\b", re.IGNORECASE)
+    filtered, seen = [], set()
+    for r in all_results:
+        if r["magnet"] in seen:
+            continue
+        norm = re.sub(r"[._\-]", " ", r["title"])
+        if pattern.search(norm) and idx.is_valid_quality(r["title"]):
+            seen.add(r["magnet"])
+            filtered.append(r)
+        elif search_word.lower() in norm.lower() and idx.is_valid_quality(r["title"]):
+            seen.add(r["magnet"])
+            filtered.append(r)
+
+    # بدائل تقريبية إن لم نجد تطابقاً دقيقاً
+    if not filtered:
+        for r in all_results:
+            if r["magnet"] in seen or not idx.is_valid_quality(r["title"]):
+                continue
+            seen.add(r["magnet"])
+            filtered.append(r)
+
+    filtered.sort(key=lambda x: x["seeders"], reverse=True)
+    return filtered[:30]
+
 _lock = threading.RLock()
 _state = {
     "logs": [],
@@ -688,25 +753,23 @@ def search():
     imdb_id, title, year = resolved
     idx = CustomIndexer()
     clean_search_word = re.sub(r'\b(19\d{2}|20\d{2})\b|\(|\)', '', query).strip()
-    releases = idx.search_all(imdb_id, title, year, clean_search_word)
+
+    source_status = {}
+    releases = parallel_search(imdb_id, title, year, clean_search_word, source_status)
     fallback = False
+    used_fallback = False
+    if not releases:
+        fallback = True
+        used_fallback = True
 
     if not releases:
-        raw = idx.search_torrentio(imdb_id) + idx.search_piratebay(title, year) + idx.search_yts(imdb_id)
-        seen, approx = set(), []
-        for r in raw:
-            if r["magnet"] in seen or not idx.is_valid_quality(r["title"]):
-                continue
-            seen.add(r["magnet"])
-            approx.append(r)
-        approx.sort(key=lambda x: x["seeders"], reverse=True)
-        releases, fallback = approx[:20], True
-
-    if not releases:
-        return jsonify({"error": f"لا توجد نسخ متاحة لـ {title} ({year})"}), 404
+        return jsonify({"error": f"لا توجد نسخ متاحة لـ {title} ({year})",
+                        "sources": source_status,
+                        "note": "المصادر التي فشلت قد تكون محجوبة من الخادم"}), 404
 
     return jsonify({"title": title, "year": year, "imdb_id": imdb_id,
-                    "releases": releases, "fallback": fallback})
+                    "releases": releases, "fallback": fallback,
+                    "sources": source_status})
 
 
 @app.route("/download", methods=["POST"])

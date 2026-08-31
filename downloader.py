@@ -151,7 +151,7 @@ class IMDbResolver:
         url = f"https://v3.sg.media-imdb.com/suggestion/{first_char}/{quote_plus(clean_title.lower())}.json"
 
         try:
-            resp = requests.get(url, headers=self.headers, timeout=10)
+            resp = requests.get(url, headers=self.headers, timeout=6)
             if resp.status_code != 200:
                 return None
 
@@ -221,7 +221,7 @@ class CustomIndexer:
         results = []
 
         try:
-            resp = requests.get(url, headers=self.headers, timeout=10)
+            resp = requests.get(url, headers=self.headers, timeout=3)
             if resp.status_code != 200:
                 return []
 
@@ -262,7 +262,7 @@ class CustomIndexer:
         results = []
 
         try:
-            resp = requests.get(url, headers=self.headers, timeout=10)
+            resp = requests.get(url, headers=self.headers, timeout=3)
             if resp.status_code != 200:
                 return []
 
@@ -312,7 +312,7 @@ class CustomIndexer:
         results = []
 
         try:
-            resp = requests.get(url, headers=self.headers, timeout=10)
+            resp = requests.get(url, headers=self.headers, timeout=3)
             if resp.status_code != 200:
                 return []
 
