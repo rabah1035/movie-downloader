@@ -327,7 +327,19 @@ PAGE = """
   .bar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
   input[type=text] { flex:1; padding:10px; border-radius:6px; border:1px solid #333;
                      background:#1c1f2b; color:#fff; min-width:180px; }
-  #dest { max-width:340px; }
+  #dest { max-width:240px; }
+  #browseBtn { background:#26323f; color:#c9cdd6; font-weight:normal; font-size:12.5px;
+               border:1px solid #333; padding:8px 12px; }
+  #wrap { position:relative; flex:1; min-width:180px; }
+  #query { width:100%; box-sizing:border-box; }
+  #sugg { position:absolute; top:100%; right:0; left:0; z-index:50; background:#1a1d29;
+          border:1px solid #333; border-radius:8px; margin-top:2px; max-height:260px;
+          overflow-y:auto; display:none; box-shadow:0 6px 18px rgba(0,0,0,.5); }
+  .sugg-item { padding:9px 12px; cursor:pointer; font-size:13.5px; display:flex;
+               justify-content:space-between; gap:8px; border-bottom:1px solid #262a38; }
+  .sugg-item:hover, .sugg-item.hl { background:#243046; }
+  .sugg-item .t { color:#fff; direction:ltr; text-align:left; }
+  .sugg-item .y { color:#8ab4ff; font-size:12px; white-space:nowrap; }
   button { padding:10px 18px; border:none; border-radius:6px; cursor:pointer;
            background:#4fc3f7; color:#000; font-weight:bold; font-size:14px; }
   button:hover:not(:disabled) { filter:brightness(1.15); }
@@ -370,10 +382,16 @@ PAGE = """
 <h1><span data-i18n="appTitle">🎬 محمّل الأفلام</span> <a href="/library" data-i18n="libraryLink">📚 مكتبة أفلامي</a></h1>
 
 <div class="bar">
-  <input type="text" id="dest" value="{{ dest }}">
-  <input type="text" id="query" data-i18n-ph="searchPh"
-         placeholder="اكتب اسم الفيلم... مثال: Bloodsport 1988"
-         onkeydown="if(event.key==='Enter') doSearch()">
+  <input type="text" id="dest" value="{{ dest }}" title="{{ dest }}">
+  <button id="browseBtn" data-i18n="browseBtn" onclick="browseFolder()">📂 تصفح</button>
+  <div id="wrap">
+    <input type="text" id="query" data-i18n-ph="searchPh"
+           placeholder="اكتب اسم الفيلم... مثال: Bloodsport 1988"
+           autocomplete="off"
+           oninput="onQueryInput()"
+           onkeydown="onQueryKey(event)">
+    <div id="sugg"></div>
+  </div>
   <button id="sbtn" data-i18n="searchBtn" onclick="doSearch()">🔍 بحث</button>
 </div>
 
@@ -406,7 +424,7 @@ PAGE = """
 const I18N = {
   ar: {
     appTitle:'🎬 محمّل الأفلام', libraryLink:'📚 مكتبة أفلامي',
-    searchPh:'اكتب اسم الفيلم... مثال: Bloodsport 1988', searchBtn:'🔍 بحث',
+    searchPh:'اكتب اسم الفيلم... مثال: Bloodsport 1988', searchBtn:'🔍 بحث', browseBtn:'📂 تصفح',
     thTitle:'العنوان', thSize:'الحجم', thSeeds:'السييدرز', thSource:'المصدر',
     dlBtn:"⬇️ تحميل", pauseB:'⏸ إيقاف مؤقت', resumeB:'▶️ استئناف', cancelB:'❌ إلغاء التحميل',
     errEmpty:'⚠️ اكتب اسم فيلم أولاً', searching:'⏳ جاري البحث...',
@@ -419,7 +437,7 @@ const I18N = {
   },
   fr: {
     appTitle:'🎬 Téléchargeur de Films', libraryLink:'📚 Ma Bibliothèque',
-    searchPh:"Tapez le nom du film... ex : Bloodsport 1988", searchBtn:'🔍 Rechercher',
+    searchPh:"Tapez le nom du film... ex : Bloodsport 1988", searchBtn:'🔍 Rechercher', browseBtn:'📂 Parcourir',
     thTitle:'Titre', thSize:'Taille', thSeeds:'Seeds', thSource:'Source',
     dlBtn:'⬇️ Télécharger', pauseB:'⏸ Pause', resumeB:'▶️ Reprendre', cancelB:'❌ Annuler le téléchargement',
     errEmpty:"⚠️ Tapez d'abord un nom de film", searching:'⏳ Recherche en cours...',
@@ -432,7 +450,7 @@ const I18N = {
   },
   en: {
     appTitle:'🎬 Movie Downloader', libraryLink:'📚 My Movie Library',
-    searchPh:'Type a movie name... e.g. Bloodsport 1988', searchBtn:'🔍 Search',
+    searchPh:'Type a movie name... e.g. Bloodsport 1988', searchBtn:'🔍 Search', browseBtn:'📂 Browse',
     thTitle:'Title', thSize:'Size', thSeeds:'Seeders', thSource:'Source',
     dlBtn:'⬇️ Download', pauseB:'⏸ Pause', resumeB:'▶️ Resume', cancelB:'❌ Cancel Download',
     errEmpty:'⚠️ Enter a movie name first', searching:'⏳ Searching...',
@@ -494,7 +512,82 @@ function applyLang(lang) {
 }
 function setLang(lang){ applyLang(lang); }
 
+// ---------- اقتراحات البحث الذكية ----------
+let suggTimer = null, suggItems = [], suggIdx = -1;
+
+async function onQueryInput() {
+  clearTimeout(suggTimer);
+  const q = document.getElementById('query').value.trim();
+  if (q.length < 2) { hideSugg(); return; }
+  suggTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch('/suggest', {method:'POST', headers:{'Content-Type':'application/json'},
+                                            body: JSON.stringify({query:q})});
+      const data = await resp.json();
+      showSugg(data.suggestions || []);
+    } catch(e) { hideSugg(); }
+  }, 280);
+}
+
+function showSugg(list) {
+  const box = document.getElementById('sugg');
+  suggItems = list;
+  if (!list.length) { hideSugg(); return; }
+  box.innerHTML = '';
+  list.forEach((s, i) => {
+    const d = document.createElement('div');
+    d.className = 'sugg-item';
+    d.innerHTML = `<span class="t">${s.title}</span><span class="y">${s.year}</span>`;
+    d.onmousedown = (e) => { e.preventDefault(); pickSugg(i); };
+    box.appendChild(d);
+  });
+  box.style.display = 'block';
+  suggIdx = -1;
+}
+
+function hideSugg() {
+  document.getElementById('sugg').style.display = 'none';
+  suggItems = []; suggIdx = -1;
+}
+
+function pickSugg(i) {
+  const s = suggItems[i];
+  if (!s) return;
+  document.getElementById('query').value = s.year ? `${s.title} ${s.year}` : s.title;
+  matched = { title: s.title, year: s.year, imdb_id: s.imdb_id };
+  hideSugg();
+  doSearch();
+}
+
+function onQueryKey(e) {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (suggItems.length && suggIdx >= 0) { pickSugg(suggIdx); }
+    else { hideSugg(); doSearch(); }
+    return;
+  }
+  if (suggItems.length) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); suggIdx = (suggIdx + 1) % suggItems.length; highlightSugg(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); suggIdx = (suggIdx - 1 + suggItems.length) % suggItems.length; highlightSugg(); }
+    else if (e.key === 'Escape') { hideSugg(); }
+  }
+}
+
+function highlightSugg() {
+  const items = document.querySelectorAll('.sugg-item');
+  items.forEach((el, i) => el.classList.toggle('hl', i === suggIdx));
+}
+
+function browseFolder() {
+  // على نسخة سطح المكتب المتصفح، لا يمكن فتح محدد مجلد نظام؛ نلجأ لمثال نصي بسيط
+  const d = document.getElementById('dest');
+  d.focus(); d.select();
+  showBanner('📁 انسخ المسار الكامل لمجلد الحفظ هنا، مثل: D:\\\\My TV\\\\data\\\\media\\\\movies', 'info');
+}
+
 let releases = [], matched = null;
+
+
 
 function showBanner(text, cls) {
   const b = document.getElementById('banner');
@@ -627,10 +720,6 @@ setInterval(async () => {
 }, 1000);
 
 applyLang(LANG);
-
-document.getElementById('dest').addEventListener('keydown', e => {
-  if (e.key === 'Enter') doSearch();
-});
 </script>
 </body>
 </html>
@@ -772,7 +861,55 @@ def search():
                     "sources": source_status})
 
 
-@app.route("/download", methods=["POST"])
+@app.route("/suggest", methods=["POST"])
+def suggest():
+    """اقتراحات أفلام أثناء الكتابة — بأي لغة وتتحمل الأخطاء الإملائية."""
+    query = (request.json or {}).get("query", "").strip()
+    if not query or len(query) < 2:
+        return jsonify({"suggestions": []})
+
+    resolver = IMDbResolver()
+
+    # 1) اقتراحات مباشرة عبر imdb suggest API (أي لغة)
+    suggestions = _imdb_autocomplete(resolver, query)
+
+    # 2) تصحيح إملائي تقريبي: جرّب إزالة سنة ثم بحث مرة أخرى
+    if not suggestions and len(query) >= 3:
+        try:
+            cleaned = re.sub(r"\b(19\d{2}|20\d{2})\b", "", query).strip()
+            if cleaned != query and cleaned:
+                suggestions = _imdb_autocomplete(resolver, cleaned)
+        except Exception:
+            pass
+
+    return jsonify({"suggestions": suggestions[:8]})
+
+
+def _imdb_autocomplete(resolver, term: str):
+    """يبحث في IMDb بأي لغة عبر نقطة الاقتراحات الرسمية."""
+    if not term:
+        return []
+    out = []
+    try:
+        from urllib.parse import quote_plus
+        first = term.lower().replace(" ", "_")[0]
+        url = f"https://v3.sg.media-imdb.com/suggestion/{first}/{quote_plus(term.lower())}.json"
+        resp = requests.get(url, headers=resolver.headers, timeout=4)
+        if resp.status_code == 200:
+            for item in resp.json().get("d", [])[:8]:
+                if item.get("id", "").startswith("tt"):
+                    out.append({
+                        "title": item.get("l", ""),
+                        "year": str(item.get("y", "")),
+                        "imdb_id": item.get("id", ""),
+                        "lang": "close",
+                    })
+    except Exception:
+        pass
+    return out
+
+
+
 def download():
     data = request.json or {}
     magnet, title, year, dest, size = (
