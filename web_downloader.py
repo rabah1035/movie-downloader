@@ -432,7 +432,7 @@ const I18N = {
     srvDown:'❌ الخادم غير متصل — تأكد أن web_downloader.py يعمل ثم أعد المحاولة',
     dlInfo:'⏳ التحميل قيد التنفيذ — يمكنك ⏸ الإيقاف المؤقت أو ❌ الإلغاء',
     unknownErr:'خطأ غير معروف', startFail:'تعذر بدء التحميل',
-    dlLocal:'✅ فُتح رابط التورنت — سيبدأ التحميل على جهازك عبر تطبيق التورنت', noMagnet:'الرابط غير متوفر لهذه النسخة',
+    dlLocal:'✅ فُتح رابط التورنت — سيبدأ التحميل على جهازك عبر تطبيق التورنت', noMagnet:'الرابط غير متوفر لهذه النسخة', notFoundI:'لم يتم العثور على الفيلم', noRelI:'لا توجد نسخ متاحة لهذا الفيلم',
     of:'من', speedL:'⬇️ السرعة', etaL:'⏳ متبقي', elL:'⏱ المنقضي',
     connecting:'⏳ جاري الاتصال بالـ Peers وجلب بيانات الفيلم...'
   },
@@ -446,7 +446,7 @@ const I18N = {
     srvDown:'❌ Serveur injoignable — vérifiez que web_downloader.py fonctionne puis réessayez',
     dlInfo:'⏳ Téléchargement en cours — ⏸ Pause ou ❌ Annuler disponibles',
     unknownErr:'Erreur inconnue', startFail:'Impossible de démarrer le téléchargement',
-    dlLocal:'✅ Lien torrent ouvert — le téléchargement démarre sur votre appareil via votre client torrent', noMagnet:'Lien indisponible pour cette version',
+    dlLocal:'✅ Lien torrent ouvert — le téléchargement démarre sur votre appareil via votre client torrent', noMagnet:'Lien indisponible pour cette version', notFoundI:'Film introuvable', noRelI:'Aucune version disponible pour ce film',
     of:'sur', speedL:'⬇️ Vitesse', etaL:'⏳ Restant', elL:'⏱ Écoulé',
     connecting:'⏳ Connexion aux peers et récupération des données du film...'
   },
@@ -460,7 +460,7 @@ const I18N = {
     srvDown:'❌ Server unreachable — make sure web_downloader.py is running, then retry',
     dlInfo:'⏳ Download in progress — you can ⏸ Pause or ❌ Cancel',
     unknownErr:'Unknown error', startFail:'Could not start the download',
-    dlLocal:'✅ Torrent link opened — download starts on your device via your torrent client', noMagnet:'No link available for this release',
+    dlLocal:'✅ Torrent link opened — download starts on your device via your torrent client', noMagnet:'No link available for this release', notFoundI:'Movie not found', noRelI:'No releases available for this movie',
     of:'of', speedL:'⬇️ Speed', etaL:'⏳ ETA', elL:'⏱ Elapsed',
     connecting:'⏳ Connecting to peers and fetching movie data...'
   }
@@ -608,15 +608,35 @@ async function doSearch() {
   showBanner(I18N[LANG].searching, 'info');
 
   try {
-    const resp = await fetch('/search', {
+    // 1) حلّ الفيلم عبر خادمنا (IMDb) — يعمل حتى لو حُذف خادم المصادر
+    const sug = await fetch('/suggest', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({query:q})
-    });
-    const data = await resp.json();
-    if (!resp.ok) { showBanner('❌ ' + TR(data.error || I18N[LANG].unknownErr), 'err'); return; }
+    }).then(r => r.json());
+    let movie = null;
+    const sugs = sug.suggestions || [];
+    if (sugs.length) {
+      const s = sugs[0];
+      const sb = (s.title||'').toLowerCase().replace(/[\s:.\-_]+/g,'');
+      const qb = q.toLowerCase().replace(/[\s:.\-_]+/g,'');
+      if (sb && (qb.includes(sb) || sb.includes(qb))) movie = s;
+    }
+    if (!movie) {
+      showBanner('❌ ' + (I18N[LANG].notFoundI || 'لم يتم العثور على الفيلم'), 'err');
+      return;
+    }
+    matched = {title:movie.title, year:movie.year, imdb_id:movie.imdb_id};
 
-    matched = {title:data.title, year:data.year, imdb_id:data.imdb_id};
-    releases = data.releases;
+    // 2) جلب النسخ مباشرة من Torrentio من متصفح الزائر (يتجاوز حجب الخادم)
+    const tj = await fetch('https://torrentio.strem.fun/stream/movie/' + movie.imdb_id + '.json').then(r => r.json());
+    const streams = (tj && tj.streams) ? tj.streams : [];
+    releases = streams.filter(s => s && (s.fileName || s.name)).map(s => ({
+      title: s.fileName || s.name || movie.title,
+      size: s.fileSize ? fmtSize(s.fileSize) : '—',
+      seeders: '—',
+      indexer: 'Torrentio',
+      magnet: (s.infoHash ? 'magnet:?xt=urn:btih:' + s.infoHash + (s.fileIdx !== undefined ? '&dn=&fileindex=' + s.fileIdx : '') : '') || ''
+    }));
 
     const tbody = document.querySelector('#tbl tbody');
     tbody.innerHTML = '';
@@ -627,22 +647,17 @@ async function doSearch() {
         `<td>${r.size}</td>` +
         `<td>${r.seeders}</td>` +
         `<td>${r.indexer}</td>` +
-        `<td><button class="rowbtn" onclick='startDownload(${i})'>${I18N[LANG].dlBtn}</button></td>`;
+        `<td><button class="rowbtn" ${r.magnet ? '' : 'disabled'} onclick='startDownload(${i})'>${I18N[LANG].dlBtn}</button></td>`;
       tbody.appendChild(tr);
     });
     document.getElementById('tbl').style.display = 'table';
-    if (data.fallback) {
-      const msg = {
-        ar:`⚠️ لا توجد نسخة مطابقة حرفياً لعبارة البحث — عرض ${releases.length} نسخة بديلة متاحة`,
-        fr:`⚠️ Aucune correspondance exacte — affichage de ${releases.length} versions approximatives`,
-        en:`⚠️ No exact title match — showing ${releases.length} approximate releases`
-      };
-      showBanner(msg[LANG], 'err');
+    if (!releases.length) {
+      showBanner('❌ ' + (I18N[LANG].noRelI || 'لا توجد نسخ متاحة لهذا الفيلم'), 'err');
     } else {
       const msg = {
-        ar:`✅ تم العثور على ${releases.length} نسخة من: ${data.title} (${data.year})`,
-        fr:`✅ ${releases.length} version(s) trouvée(s) pour : ${data.title} (${data.year})`,
-        en:`✅ Found ${releases.length} release(s) for: ${data.title} (${data.year})`
+        ar:`✅ تم العثور على ${releases.length} نسخة من: ${movie.title} (${movie.year})`,
+        fr:`✅ ${releases.length} version(s) trouvée(s) pour : ${movie.title} (${movie.year})`,
+        en:`✅ Found ${releases.length} release(s) for: ${movie.title} (${movie.year})`
       };
       showBanner(msg[LANG], 'ok');
     }
@@ -651,6 +666,14 @@ async function doSearch() {
   } finally {
     document.getElementById('sbtn').disabled = false;
   }
+}
+
+function fmtSize(bytes) {
+  if (!bytes || isNaN(bytes)) return '—';
+  const n = Number(bytes);
+  const u = ['B','KB','MB','GB','TB']; let i=0;
+  while (n >= 1024 && i < u.length-1){ n/=1024; i++; }
+  return n.toFixed(1) + ' ' + u[i];
 }
 
 async function startDownload(i) {
