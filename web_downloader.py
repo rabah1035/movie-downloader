@@ -608,63 +608,102 @@ async function doSearch() {
   showBanner(I18N[LANG].searching, 'info');
 
   try {
-    // 1) حلّ الفيلم عبر خادمنا (IMDb) — يعمل حتى لو حُذف خادم المصادر
-    const sug = await fetch('/suggest', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({query:q})
-    }).then(r => r.json());
-    let movie = null;
-    const sugs = sug.suggestions || [];
-    if (sugs.length) {
-      const s = sugs[0];
-      const sb = (s.title||'').toLowerCase().replace(/[\s:.\-_]+/g,'');
-      const qb = q.toLowerCase().replace(/[\s:.\-_]+/g,'');
-      if (sb && (qb.includes(sb) || sb.includes(qb))) movie = s;
+    // ---- المرحلة 1: المحاولة عبر الخادم (تعمل محلياً على الأقل) ----
+    let data = null, serverOK = false;
+    try {
+      const resp = await fetch('/search', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({query:q})
+      });
+      data = await resp.json();
+      if (resp.ok && data.releases && data.releases.length) serverOK = true;
+    } catch(e) { data = null; }
+
+    if (serverOK) {
+      matched = {title:data.title, year:data.year, imdb_id:data.imdb_id};
+      releases = data.releases;
+      renderResults(data.title, data.year, data.fallback);
+      return;
     }
+    console.log('server search failed, falling back to browser-direct', data && data.error);
+
+    // ---- المرحلة 2: حل الفيلم من المقترحات (ان كان الخادم عاد خطأ) ----
+    let movie = null;
+    try {
+      const sug = await fetch('/suggest', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({query:q})
+      }).then(r => r.json());
+      const sugs = sug.suggestions || [];
+      if (sugs.length) {
+        const s = sugs[0];
+        const sb = (s.title||'').toLowerCase().replace(/[\s:.\-_]+/g,'');
+        const qb = q.toLowerCase().replace(/[\s:.\-_]+/g,'');
+        if (sb && (qb.includes(sb) || sb.includes(qb))) movie = s;
+      }
+    } catch(e) {}
     if (!movie) {
       showBanner('❌ ' + (I18N[LANG].notFoundI || 'لم يتم العثور على الفيلم'), 'err');
       return;
     }
     matched = {title:movie.title, year:movie.year, imdb_id:movie.imdb_id};
 
-    // 2) جلب النسخ مباشرة من Torrentio من متصفح الزائر (يتجاوز حجب الخادم)
-    const tj = await fetch('https://torrentio.strem.fun/stream/movie/' + movie.imdb_id + '.json').then(r => r.json());
-    const streams = (tj && tj.streams) ? tj.streams : [];
-    releases = streams.filter(s => s && (s.fileName || s.name)).map(s => ({
-      title: s.fileName || s.name || movie.title,
-      size: s.fileSize ? fmtSize(s.fileSize) : '—',
-      seeders: '—',
-      indexer: 'Torrentio',
-      magnet: (s.infoHash ? 'magnet:?xt=urn:btih:' + s.infoHash + (s.fileIdx !== undefined ? '&dn=&fileindex=' + s.fileIdx : '') : '') || ''
-    }));
-
-    const tbody = document.querySelector('#tbl tbody');
-    tbody.innerHTML = '';
-    releases.forEach((r, i) => {
-      const tr = document.createElement('tr');
-      tr.innerHTML =
-        `<td class="title">${r.title}</td>` +
-        `<td>${r.size}</td>` +
-        `<td>${r.seeders}</td>` +
-        `<td>${r.indexer}</td>` +
-        `<td><button class="rowbtn" ${r.magnet ? '' : 'disabled'} onclick='startDownload(${i})'>${I18N[LANG].dlBtn}</button></td>`;
-      tbody.appendChild(tr);
-    });
-    document.getElementById('tbl').style.display = 'table';
-    if (!releases.length) {
+    // ---- المرحلة 3: جلب النسخ مباشرة من Torrentio من متصفح الزائر ----
+    let releases2 = [];
+    try {
+      const tj = await fetch('https://torrentio.strem.fun/stream/movie/' + movie.imdb_id + '.json').then(r => r.json());
+      const streams = (tj && tj.streams) ? tj.streams : [];
+      releases2 = streams.filter(s => s && (s.fileName || s.name)).map(s => ({
+        title: s.fileName || s.name || movie.title,
+        size: s.fileSize ? fmtSize(s.fileSize) : '—',
+        seeders: '—',
+        indexer: 'Torrentio',
+        magnet: (s.infoHash ? 'magnet:?xt=urn:btih:' + s.infoHash + (s.fileIdx !== undefined ? '&dn=&fileindex=' + s.fileIdx : '') : '') || ''
+      }));
+    } catch(e) { console.warn('torrentio direct failed', e); }
+    releases = releases2;
+    renderResults(movie.title, movie.year, false);
+    if (!releases2.length) {
       showBanner('❌ ' + (I18N[LANG].noRelI || 'لا توجد نسخ متاحة لهذا الفيلم'), 'err');
-    } else {
-      const msg = {
-        ar:`✅ تم العثور على ${releases.length} نسخة من: ${movie.title} (${movie.year})`,
-        fr:`✅ ${releases.length} version(s) trouvée(s) pour : ${movie.title} (${movie.year})`,
-        en:`✅ Found ${releases.length} release(s) for: ${movie.title} (${movie.year})`
-      };
-      showBanner(msg[LANG], 'ok');
     }
   } catch(e) {
+    console.error('doSearch error', e);
     showBanner(I18N[LANG].connErr, 'err');
   } finally {
     document.getElementById('sbtn').disabled = false;
+  }
+}
+
+function renderResults(title, year, fallback) {
+  const tbody = document.querySelector('#tbl tbody');
+  tbody.innerHTML = '';
+  releases.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td class="title">${r.title}</td>` +
+      `<td>${r.size}</td>` +
+      `<td>${r.seeders}</td>` +
+      `<td>${r.indexer}</td>` +
+      `<td><button class="rowbtn" ${r.magnet ? '' : 'disabled'} onclick='startDownload(${i})'>${I18N[LANG].dlBtn}</button></td>`;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('tbl').style.display = releases.length ? 'table' : 'none';
+  if (!releases.length) {
+    showBanner('❌ ' + (I18N[LANG].noRelI || 'لا توجد نسخ متاحة لهذا الفيلم'), 'err');
+  } else if (fallback) {
+    const msg = {
+      ar:`⚠️ لا توجد نسخة مطابقة حرفياً لعبارة البحث — عرض ${releases.length} نسخة بديلة متاحة`,
+      fr:`⚠️ Aucune correspondance exacte — affichage de ${releases.length} versions approximatives`,
+      en:`⚠️ No exact title match — showing ${releases.length} approximate releases`
+    };
+    showBanner(msg[LANG], 'err');
+  } else {
+    const msg = {
+      ar:`✅ تم العثور على ${releases.length} نسخة من: ${title} (${year})`,
+      fr:`✅ ${releases.length} version(s) trouvée(s) pour : ${title} (${year})`,
+      en:`✅ Found ${releases.length} release(s) for: ${title} (${year})`
+    };
+    showBanner(msg[LANG], 'ok');
   }
 }
 
